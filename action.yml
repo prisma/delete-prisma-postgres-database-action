@@ -1,0 +1,27 @@
+name: 'Delete Prisma Postgres Database'
+description: 'Delete a Prisma Postgres database'
+author: 'Prisma'
+branding:
+  icon: 'trash-2'
+  color: 'red'
+
+inputs:
+  service_token:
+    description: 'Prisma Postgres service token'
+    required: true
+  project_id:
+    description: 'Prisma project ID'
+    required: true
+  database_name:
+    description: 'Database name to delete'
+    required: false
+
+outputs:
+  deleted:
+    description: 'Whether the database was deleted'
+  database_name:
+    description: 'The name of the database that was deleted'
+
+runs:
+  using: 'node20'
+  main: 'index.js'
