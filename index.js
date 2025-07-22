@@ -6,44 +6,79 @@ async function run() {
     const serviceToken = core.getInput('service_token');
     const projectId = core.getInput('project_id');
     const databaseName = core.getInput('database_name');
+    const databaseId = core.getInput('database_id');
 
     if (!serviceToken || !projectId) {
       throw new Error('service_token and project_id are required');
     }
 
-    const context = github.context;
-    let sanitizedDbName;
+    let targetDatabase = null;
+    let deletionMethod = '';
 
-    if (databaseName) {
-      sanitizedDbName = sanitizeDatabaseName(databaseName);
+    if (databaseId) {
+      if (databaseName) {
+        core.info(
+          'Both database_id and database_name provided. Using database_id for deletion.'
+        );
+      }
+      // Delete by database ID
+      core.info(`Deleting database by ID: ${databaseId}`);
+      deletionMethod = 'id';
+      targetDatabase = { id: databaseId, name: `database-${databaseId}` };
     } else {
-      if (context.payload.pull_request) {
-        const prNumber = context.payload.pull_request.number;
-        const branchName = context.payload.pull_request.head.ref;
-        sanitizedDbName = sanitizeDatabaseName(`pr-${prNumber}-${branchName}`);
+      // Delete by database name
+      const context = github.context;
+      let sanitizedDbName;
+
+      if (databaseName) {
+        sanitizedDbName = sanitizeDatabaseName(databaseName);
       } else {
-        sanitizedDbName = sanitizeDatabaseName(`test-${context.runNumber}`);
+        if (context.payload.pull_request) {
+          const prNumber = context.payload.pull_request.number;
+          const branchName = context.payload.pull_request.head.ref;
+          sanitizedDbName = sanitizeDatabaseName(
+            `pr-${prNumber}-${branchName}`
+          );
+        } else {
+          sanitizedDbName = sanitizeDatabaseName(`test-${context.runNumber}`);
+        }
+      }
+
+      core.info(`Looking for database to cleanup: ${sanitizedDbName}`);
+      deletionMethod = 'name';
+      targetDatabase = await checkDatabaseExists(
+        serviceToken,
+        projectId,
+        sanitizedDbName
+      );
+
+      if (targetDatabase) {
+        targetDatabase.name = sanitizedDbName;
       }
     }
 
-    core.info(`Looking for database to cleanup: ${sanitizedDbName}`);
+    if (targetDatabase) {
+      core.info(
+        `Database ${targetDatabase.name} exists with ID: ${targetDatabase.id}. Deleting...`
+      );
+      await deleteDatabase(serviceToken, targetDatabase.id);
 
-    const existingDb = await checkDatabaseExists(serviceToken, projectId, sanitizedDbName);
-    
-    if (existingDb) {
-      core.info(`Database ${sanitizedDbName} exists with ID: ${existingDb.id}. Deleting...`);
-      await deleteDatabase(serviceToken, existingDb.id);
-      
       core.setOutput('deleted', 'true');
-      core.setOutput('database_name', sanitizedDbName);
-      
+      core.setOutput('database_name', targetDatabase.name);
+
       core.info('✅ Database deleted successfully!');
     } else {
-      core.info(`No database found with name: ${sanitizedDbName}`);
+      const identifier =
+        deletionMethod === 'id'
+          ? `ID: ${databaseId}`
+          : `name: ${sanitizedDbName}`;
+      core.info(`No database found with ${identifier}`);
       core.setOutput('deleted', 'false');
-      core.setOutput('database_name', sanitizedDbName);
+      core.setOutput(
+        'database_name',
+        deletionMethod === 'id' ? `database-${databaseId}` : sanitizedDbName
+      );
     }
-
   } catch (error) {
     core.setFailed(error.message);
   }
@@ -61,18 +96,20 @@ async function checkDatabaseExists(serviceToken, projectId, dbName) {
     `https://api.prisma.io/v1/projects/${projectId}/databases`,
     {
       headers: {
-        'Authorization': `Bearer ${serviceToken}`,
-        'Content-Type': 'application/json'
-      }
+        Authorization: `Bearer ${serviceToken}`,
+        'Content-Type': 'application/json',
+      },
     }
   );
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch databases: ${response.status} ${response.statusText}`);
+    throw new Error(
+      `Failed to fetch databases: ${response.status} ${response.statusText}`
+    );
   }
 
   const data = await response.json();
-  return data.data?.find(db => db.name === dbName);
+  return data.data?.find((db) => db.name === dbName);
 }
 
 async function deleteDatabase(serviceToken, databaseId) {
@@ -81,15 +118,17 @@ async function deleteDatabase(serviceToken, databaseId) {
     {
       method: 'DELETE',
       headers: {
-        'Authorization': `Bearer ${serviceToken}`,
-        'Content-Type': 'application/json'
-      }
+        Authorization: `Bearer ${serviceToken}`,
+        'Content-Type': 'application/json',
+      },
     }
   );
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Failed to delete database: ${response.status} ${response.statusText} - ${errorText}`);
+    throw new Error(
+      `Failed to delete database: ${response.status} ${response.statusText} - ${errorText}`
+    );
   }
 
   const data = await response.json();
