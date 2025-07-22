@@ -8,24 +8,49 @@ A GitHub Action to delete Prisma Postgres databases in your CI/CD workflows.
 
 ```yaml
 - name: Delete Database
+  id: delete
   uses: prisma/delete-prisma-postgres-database-action@v1
   with:
     service_token: ${{ secrets.PRISMA_POSTGRES_SERVICE_TOKEN }}
     project_id: ${{ secrets.PRISMA_PROJECT_ID }}
+
+- name: Check Result
+  run: |
+    echo "Database deleted: ${{ steps.delete.outputs.deleted }}"
+    echo "Database name: ${{ steps.delete.outputs.database_name }}"
 ```
 
 ### With Custom Database Name
 
 ```yaml
 - name: Delete Database
+  id: delete
   uses: prisma/delete-prisma-postgres-database-action@v1
   with:
     service_token: ${{ secrets.PRISMA_POSTGRES_SERVICE_TOKEN }}
     project_id: ${{ secrets.PRISMA_PROJECT_ID }}
     database_name: "my-test-db"
+
+- name: Check Result
+  run: echo "Database deleted: ${{ steps.delete.outputs.deleted }}"
 ```
 
-### Complete Example for Pull Request Cleanup
+### With Database ID
+
+```yaml
+- name: Delete Database
+  id: delete
+  uses: prisma/delete-prisma-postgres-database-action@v1
+  with:
+    service_token: ${{ secrets.PRISMA_POSTGRES_SERVICE_TOKEN }}
+    project_id: ${{ secrets.PRISMA_PROJECT_ID }}
+    database_id: "db_123456789"
+
+- name: Check Result
+  run: echo "Database deleted: ${{ steps.delete.outputs.deleted }}"
+```
+
+### Simple Pull Request Cleanup
 
 ```yaml
 name: PR Database Cleanup
@@ -55,46 +80,73 @@ jobs:
           fi
 ```
 
-### Combined with Provision Action
+### Complete Example to Provision Prisma Postgres when PR is opened and delete when PR is closed
 
 ```yaml
-name: Database Lifecycle Management
+name: Prisma Postgres Database Lifecycle
 on:
   pull_request:
     types: [opened, reopened, synchronize, closed]
 
 jobs:
-  provision:
+  create-database:
+    name: Create Database
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Provision Database
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create Database
+        id: create
         uses: prisma/create-prisma-postgres-database-action@v1
         with:
           service_token: ${{ secrets.PRISMA_POSTGRES_SERVICE_TOKEN }}
           project_id: ${{ secrets.PRISMA_PROJECT_ID }}
-      # Your tests here...
+          database_name: "pr-${{ github.event.pull_request.number }}"
 
-  cleanup:
-    if: github.event.action == 'closed'
+      - name: Verify database creation
+        run: |
+          echo "✅ Database created successfully!"
+          echo "Database ID: ${{ steps.create.outputs.database_id }}"
+          echo "Database Name: ${{ steps.create.outputs.database_name }}"
+          echo "Database URL is available in steps.create.outputs.database_url"
+
+  cleanup-database:
+    name: Cleanup Database  
+    if: always() && github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Cleanup Database
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Delete Database
+        id: delete
         uses: prisma/delete-prisma-postgres-database-action@v1
         with:
           service_token: ${{ secrets.PRISMA_POSTGRES_SERVICE_TOKEN }}
           project_id: ${{ secrets.PRISMA_PROJECT_ID }}
+          database_name: "pr-${{ github.event.pull_request.number }}"
+
+      - name: Verify database deletion
+        run: |
+          if [ "${{ steps.delete.outputs.deleted }}" == "true" ]; then
+            echo "✅ Database ${{ steps.delete.outputs.database_name }} was deleted"
+          else
+            echo "ℹ️ No database found to delete"
+          fi
 ```
 
 ## Inputs
 
-| Input           | Description                                             | Required | Default       |
-| --------------- | ------------------------------------------------------- | -------- | ------------- |
-| `service_token` | Prisma Postgres service token                           | ✅       |               |
-| `project_id`    | Prisma project ID                                       | ✅       |               |
-| `database_name` | Database name to delete (auto-detected if not provided) | ❌       | Auto-detected |
+| Input           | Description                                             | Required | Default        |
+| --------------- | ------------------------------------------------------- | -------- | -------------- |
+| `service_token` | Prisma Postgres service token                           | ✅       |                |
+| `project_id`    | Prisma project ID                                       | ✅       |                |
+| `database_name` | Database name to delete                                 | ❌       | Auto-generated |
+| `database_id`   | Database ID to delete (alternative to database_name)   | ❌       |                |
+
+**Note:** You can specify either `database_name` or `database_id`. If both are provided, `database_id` takes precedence. If neither is provided, the database name will be auto-generated based on the GitHub context.
 
 ## Outputs
 
@@ -102,6 +154,27 @@ jobs:
 | --------------- | ---------------------------------------------------- |
 | `deleted`       | Whether the database was deleted (`true` or `false`) |
 | `database_name` | The name of the database that was processed          |
+
+## Deletion Methods
+
+This action supports two ways to specify which database to delete:
+
+### 1. By Database Name
+- Searches for databases by name within the project
+- Supports auto-detection based on GitHub context
+- Names are sanitized (special characters replaced with underscores)
+
+### 2. By Database ID
+- Directly deletes a database using its unique ID
+- Faster deletion as it skips the search step
+- Useful when you have the exact database ID from previous actions
+
+## Database Naming
+
+**Auto-generated names:**
+
+- PR context: `pr_{pr_number}_{branch_name}`
+- Other contexts: `test_{run_number}`
 
 ## Setup
 
@@ -133,13 +206,6 @@ Go to your repository settings → Secrets and variables → Actions, and add:
 ### 4. Use in Your Workflow
 
 Add the action to your workflow as shown in the examples above.
-
-## Database Naming
-
-**Auto-detected names:**
-
-- PR context: `pr_{pr_number}_{branch_name}`
-- Other contexts: `test_{run_number}`
 
 ## Behavior
 
@@ -192,15 +258,32 @@ on:
 
 ### 4. Manual Cleanup
 
-On-demand database cleanup:
+On-demand database cleanup using workflow inputs:
 
 ```yaml
-on:
-  workflow_dispatch:
-    inputs:
-      database_name:
-        description: "Database name to delete"
-        required: true
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Delete Database
+        id: delete
+        uses: prisma/delete-prisma-postgres-database-action@v1
+        with:
+          service_token: ${{ secrets.PRISMA_POSTGRES_SERVICE_TOKEN }}
+          project_id: ${{ secrets.PRISMA_PROJECT_ID }}
+          database_name: ${{ github.event.inputs.database_name }}
+          database_id: ${{ github.event.inputs.database_id }}
+          
+      - name: Report cleanup result
+        run: |
+          if [ "${{ steps.delete.outputs.deleted }}" == "true" ]; then
+            echo "✅ Database ${{ steps.delete.outputs.database_name }} was deleted"
+          else
+            echo "ℹ️ No database found to delete"
+          fi
 ```
 
 ## Related Actions

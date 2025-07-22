@@ -15,6 +15,9 @@ inputs:
   database_name:
     description: 'Database name to delete'
     required: false
+  database_id:
+    description: 'Database ID to delete'
+    required: false
 
 outputs:
   deleted:
