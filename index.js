@@ -130,11 +130,6 @@ async function deleteDatabase(serviceToken, databaseId) {
       `Failed to delete database: ${response.status} ${response.statusText} - ${errorText}`
     );
   }
-
-  const data = await response.json();
-  if (data.error) {
-    throw new Error(`Delete API error: ${data.message || 'Unknown error'}`);
-  }
 }
 
 run();
